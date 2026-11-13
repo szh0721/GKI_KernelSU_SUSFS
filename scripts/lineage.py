@@ -201,8 +201,14 @@ def prepare(args):
     for origin, path in patch_sources(profile, args.droidspaces, args.ntsync):
         url = f"https://raw.githubusercontent.com/{origin['repository']}/{origin['ref']}/{path}"
         content = download(url)
+        entry = {"url": url, "sha256": sha256(content)}
+        if args.droidspaces == "345" and Path(path).name.startswith("001."):
+            port = ROOT / "patches/lineage-mondrian/sysvipc-3-4-5.patch"
+            content = port.read_bytes()
+            entry.update({"context_port": str(port.relative_to(ROOT)),
+                          "applied_sha256": sha256(content)})
         patches.append((Path(path).name, content))
-        provenance.append({"url": url, "sha256": sha256(content)})
+        provenance.append(entry)
     combined, paths = compose_patch(source, patches)
     fragment = ("# Generated Droidspaces configuration for LineageOS mondrian.\n"
                 + "\n".join(configs) + "\n").encode()

@@ -245,8 +245,35 @@ jobs:
     with:
       kernelsu_variant: ${{ inputs.kernelsu_variant }}
 
+  validate-lineage-inputs:
+    if: inputs.build_backend == 'lineage-mondrian'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check supported LineageOS options
+        env:
+          BUILD_INPUTS: ${{ toJSON(inputs) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          values = json.loads(os.environ["BUILD_INPUTS"])
+          if values["kernel_version"] != "5.10":
+              raise SystemExit("The LineageOS mondrian profile requires kernel_version=5.10.")
+          unsupported = [
+              name for name in (
+                  "use_zram", "use_bbg", "use_rekernel", "use_nomount",
+                  "cve_2026_43499_patch", "supp_op",
+              ) if values.get(name)
+          ]
+          if not values["use_kpm"].startswith("disabled"):
+              unsupported.append("use_kpm")
+          if unsupported:
+              raise SystemExit("Not ported to the LineageOS backend: " + ", ".join(unsupported))
+          PY
+
   lineage-mondrian:
     if: inputs.build_backend == 'lineage-mondrian'
+    needs: validate-lineage-inputs
     uses: ./.github/workflows/kernel-lineage-mondrian.yml
     with:
       droidspaces: ${{ inputs.droidspaces || '678' }}

@@ -27,6 +27,9 @@
 3. 按需打开 `droidspaces_ntsync`。
 4. `use_networking` 在这个后端只表示容器 NAT/macvlan/firewall 配置，不包含原 GKI 入口的 BBRv3。
 
+内核版本仍应选 `5.10`。其他尚未移植的 GKI 选项（ZRAM 增强、BBG、KPM、
+Re-Kernel、NoMount、额外安全补丁链、一加适配）若开启，会明确报错，不会静默忽略。
+
 也可以使用独立的 `LineageOS mondrian - Droidspaces` 工作流，选择 `build_backend=github`。
 新增 workflow 首次进入仓库默认分支之前，使用已经存在于默认分支的“自定义”入口，
 并将运行分支选为包含本次修改的分支。
@@ -63,13 +66,16 @@ CI 失败时查看 `baseline` / `patched` artifact 的 `build.log` 和配置差�
 | --- | --- |
 | `off` | 未启用容器补丁的基线；NTSync 和容器网络开关也必须关闭 |
 | `678` | Droidspaces 官方 SYSVIPC 6/7/8 预留位补丁和 5.10 POSIX_MQUEUE 补丁 |
-| `345` / `123` | 原仓库保留的备选补丁；不保证当前 LineageOS 源码能应用 |
+| `345` | 同一上游补丁的 LineageOS 上下文移植，使用空闲的 3/4/5 位 |
+| `123` | 原仓库保留的选项；当前基线已占用 1/2 位，会拒绝应用 |
 | `droidspaces_ntsync` | 原仓库同源 NTSync backport，用于 Wine 等场景，默认关闭 |
 | `container_networking` | Droidspaces GKI 文档列出的 NAT、macvlan、UFW/Fail2ban 配置 |
 
 这里的 `678` 等是结构体 kABI padding 位，不是手机 A/B 分区。
 在默认 `eff4b40407a1...` 上，原版 `678` 和 `678 + NTSync` 已通过补丁应用预检；
-原版 `345` / `123` 的上下文检查失败，工具会拒绝继续。
+原版 `345` / `123` 的上下文检查失败。
+`345` 由 `patches/lineage-mondrian/sysvipc-3-4-5.patch` 显式移植，
+保持原补丁逻辑，仅适配周围已变化的代码，来源和应用文件哈希都会记入清单。
 `task_struct` 的预留位 1、2 已被其他内核改动占用，不能直接强行套用 `123`。
 补丁预检通过不代表编译或设备验证通过。
 
