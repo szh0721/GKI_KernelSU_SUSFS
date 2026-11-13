@@ -97,6 +97,8 @@ def kernel_version(source):
 
 
 def selected_configs(slot, networking, ntsync):
+    if slot not in ("off", "678"):
+        raise ValueError("The LineageOS mondrian profile supports Droidspaces 678 or off only.")
     if slot == "off":
         if networking or ntsync:
             raise ValueError("Networking/NTSync require Droidspaces to be enabled.")
@@ -176,7 +178,7 @@ def compose_patch(source, patches):
             except RuntimeError as error:
                 raise ValueError(
                     f"Patch does not apply completely: {name}\n{error}\n"
-                    "No kernel source was changed. Select another slot or port the patch."
+                    "No kernel source was changed. Check the pinned source and upstream patch."
                 ) from error
         run("git", "add", "-A", cwd=scratch)
         combined = run("git", "diff", "--cached", "--binary", "--full-index", cwd=scratch)
@@ -201,14 +203,8 @@ def prepare(args):
     for origin, path in patch_sources(profile, args.droidspaces, args.ntsync):
         url = f"https://raw.githubusercontent.com/{origin['repository']}/{origin['ref']}/{path}"
         content = download(url)
-        entry = {"url": url, "sha256": sha256(content)}
-        if args.droidspaces == "345" and Path(path).name.startswith("001."):
-            port = ROOT / "patches/lineage-mondrian/sysvipc-3-4-5.patch"
-            content = port.read_bytes()
-            entry.update({"context_port": str(port.relative_to(ROOT)),
-                          "applied_sha256": sha256(content)})
         patches.append((Path(path).name, content))
-        provenance.append(entry)
+        provenance.append({"url": url, "sha256": sha256(content)})
     combined, paths = compose_patch(source, patches)
     fragment = ("# Generated Droidspaces configuration for LineageOS mondrian.\n"
                 + "\n".join(configs) + "\n").encode()
@@ -649,7 +645,7 @@ def main():
     prepare_parser.add_argument("--kernel-source", type=Path, required=True)
     prepare_parser.add_argument("--kernel-ref")
     prepare_parser.add_argument("--output", type=Path, required=True)
-    prepare_parser.add_argument("--droidspaces", choices=("off", "678", "123", "345"), default="678")
+    prepare_parser.add_argument("--droidspaces", choices=("off", "678"), default="678")
     prepare_parser.add_argument("--ntsync", action="store_true")
     prepare_parser.add_argument("--networking", action="store_true")
     prepare_parser.set_defaults(function=prepare)

@@ -16,8 +16,6 @@ on:
         type: choice
         options:
           - "678"
-          - "345"
-          - "123"
           - "off"
         default: "678"
       droidspaces_ntsync:

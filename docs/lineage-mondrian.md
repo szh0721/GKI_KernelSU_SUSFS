@@ -68,17 +68,13 @@ CI 失败时查看 `baseline` / `patched` artifact 的 `build.log` 和配置差�
 | --- | --- |
 | `off` | 未启用容器补丁的基线；NTSync 和容器网络开关也必须关闭 |
 | `678` | Droidspaces 官方 SYSVIPC 6/7/8 预留位补丁和 5.10 POSIX_MQUEUE 补丁 |
-| `345` | 同一上游补丁的 LineageOS 上下文移植，使用空闲的 3/4/5 位 |
-| `123` | 原仓库保留的选项；当前基线已占用 1/2 位，会拒绝应用 |
 | `droidspaces_ntsync` | 原仓库同源 NTSync backport，用于 Wine 等场景，默认关闭 |
 | `container_networking` | Droidspaces GKI 文档列出的 NAT、macvlan、UFW/Fail2ban 配置 |
 
-这里的 `678` 等是结构体 kABI padding 位，不是手机 A/B 分区。
+这里的 `678` 是结构体 kABI padding 位，不是手机 A/B 分区。
 在默认 `eff4b40407a1...` 上，原版 `678` 和 `678 + NTSync` 已通过补丁应用预检；
-原版 `345` / `123` 的上下文检查失败。
-`345` 由 `patches/lineage-mondrian/sysvipc-3-4-5.patch` 显式移植，
-保持原补丁逻辑，仅适配周围已变化的代码，来源和应用文件哈希都会记入清单。
-`task_struct` 的预留位 1、2 已被其他内核改动占用，不能直接强行套用 `123`。
+按当前 K60 的使用方式，只支持 `678`，不移植或测试其他槽位。
+原 GKI 工作流仍保留自己的槽位选项，但选择 LineageOS 后端时会拒绝 `123` / `345`。
 补丁预检通过不代表编译或设备验证通过。
 
 不自动启用 `CONFIG_CFS_BANDWIDTH`、`CONFIG_CGROUP_PIDS`；

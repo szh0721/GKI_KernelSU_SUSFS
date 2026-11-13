@@ -59,6 +59,11 @@ new file mode 100644
         with self.assertRaises(ValueError):
             lineage.selected_configs("off", False, True)
 
+    def test_mondrian_rejects_other_padding_slots(self):
+        for slot in ("123", "345"):
+            with self.assertRaisesRegex(ValueError, "678 or off only"):
+                lineage.selected_configs(slot, False, False)
+
     def test_container_profile_does_not_enable_unrelated_or_abi_breaking_options(self):
         configs = lineage.selected_configs("678", True, True)
         self.assertIn("CONFIG_NTSYNC=y", configs)
