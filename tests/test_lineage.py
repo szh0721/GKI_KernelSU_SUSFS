@@ -93,6 +93,24 @@ new file mode 100644
             self.assertEqual(values["CONFIG_TEXT"], '"a b"')
             self.assertEqual(lineage.config_diff({"CONFIG_DISABLED": "n"}, {}), {})
 
+    def test_retained_module_check_requires_matching_core_exports(self):
+        reference = {
+            "kernel_required_crcs": {"core": "0x1234", "module_layout": "0x4567"},
+            "unique_modules": 2, "scope": "test fixture",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            symvers = Path(temporary) / "Module.symvers"
+            symvers.write_text(
+                "0x1234 core vmlinux EXPORT_SYMBOL\n"
+                "0x4567 module_layout vmlinux EXPORT_SYMBOL\n"
+            )
+            self.assertEqual(lineage.check_retained_modules(reference, symvers)["status"], "matched")
+            symvers.write_text("0xffff core vmlinux EXPORT_SYMBOL\n")
+            report = lineage.check_retained_modules(reference, symvers)
+            self.assertEqual(report["status"], "mismatch")
+            self.assertEqual(report["missing"], ["module_layout"])
+            self.assertIn("core", report["mismatched"])
+
     def test_temporary_changes_restore_our_files_but_preserve_concurrent_edits(self):
         with tempfile.TemporaryDirectory() as temporary:
             first, second = Path(temporary) / "first", Path(temporary) / "second"

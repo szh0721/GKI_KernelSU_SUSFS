@@ -284,6 +284,31 @@ def compare_abi(baseline, current):
     }
 
 
+def check_retained_modules(reference, symvers):
+    exports = {}
+    for line in symvers.read_text().splitlines():
+        fields = line.split()
+        if len(fields) >= 3 and fields[2] == "vmlinux":
+            exports[fields[1]] = fields[0]
+    required = reference["kernel_required_crcs"]
+    if not required or not exports:
+        raise ValueError("Cannot check module CRCs without kernel requirements and vmlinux exports.")
+    missing = sorted(required.keys() - exports.keys())
+    mismatched = {
+        name: {"required": required[name], "built": exports[name]}
+        for name in sorted(required.keys() & exports.keys())
+        if int(required[name], 16) != int(exports[name], 16)
+    }
+    return {
+        "status": "matched" if not missing and not mismatched else "mismatch",
+        "unique_modules": reference["unique_modules"],
+        "kernel_crc_requirements": len(required),
+        "missing": missing, "mismatched": mismatched,
+        "scope": reference["scope"],
+        "note": "Module CRC matching does not establish runtime or full ABI compatibility.",
+    }
+
+
 def read_config(path):
     values = {}
     for line in path.read_text().splitlines():
@@ -427,6 +452,16 @@ def package(args):
             "Inspect abi-report.json; port the kABI changes or rebuild the full module set."
         )
     profile = load_json(PROFILE)
+    stock_reference_path = ROOT / profile["module_reference"]
+    stock_reference = load_json(stock_reference_path)
+    if stock_reference["kernel_ref"] != manifest["kernel_ref"]:
+        raise ValueError("Refresh the retained-module reference for this kernel commit.")
+    if file_sha256(stock_reference_path) != profile["module_reference_sha256"]:
+        raise ValueError("Retained-module reference checksum changed.")
+    stock_report = check_retained_modules(stock_reference, patched / "Module.symvers")
+    write_json(output / "retained-module-crcs.json", stock_report)
+    if stock_report["status"] != "matched":
+        raise ValueError("New kernel does not match retained module CRCs; refusing the installer.")
     actual = run("git", "rev-parse", "HEAD", cwd=anykernel).decode().strip()
     if actual != profile["anykernel_ref"]:
         raise ValueError("AnyKernel3 checkout differs from the pinned version.")
@@ -435,7 +470,7 @@ def package(args):
     shutil.copyfile(patched / "Module.symvers", output / "Module.symvers")
     write_json(output / "manifest.json", {
         **manifest, "abi_status": "baseline_symbol_crcs_unchanged",
-        "stock_rom_module_crcs_checked": False, "device_tested": False,
+        "stock_rom_module_crcs_checked": True, "device_tested": False,
         "anykernel_ref": actual,
     })
     installer = ROOT / "scripts/lineage-anykernel.sh"

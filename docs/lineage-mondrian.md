@@ -38,16 +38,19 @@ GitHub 路线：
 3. 将原生五个 fragments 的最终合并结果与手机导出的配置逐项比较；不一致就停止。
 4. 使用固定的 Android clang r596125，运行标准 Kbuild `Image modules`。
 5. 保留原调试信息和 Full LTO，增加最高 32 GiB swap；不保证所有 runner 都有足够资源。
-6. 比较两个版本 `Module.symvers` 的已有符号。CRC 改变或符号消失，拒绝生成仅替换 Image 的刷入包。
+6. 比较两个版本 `Module.symvers` 的已有符号，并核对手机现有模块要求的内核符号 CRC。
 7. 比较通过后生成设备受限的 AnyKernel3 包，保留原有 ramdisk、vendor_boot、vendor_dlkm 和设备模块。
 
 这是遵循设备参数的独立 Kbuild 流程，**不是完整 LineageOS ROM 构建**。
 它不重新编译高通外部模块；保留这些模块的前提是补丁保持其依赖的内核接口。
-CI 比较只是“本次自编译基线与补丁版本的符号 CRC 对照”，不是对已安装 ROM 全部模块的完整 ABI 认证。
-产物清单明确记录 `stock_rom_module_crcs_checked=false` 和 `device_tested=false`。
+额外参考来自当前设备的 vendor_dlkm、vendor_boot DLKM ramdisk 和 boot 中的 KernelSU LKM：
+391 个去重模块，2725 项内核符号 CRC 要求。记录只包含模块名、代码哈希、vermagic 和符号信息，
+不包含手机序列号或原始分区镜像。
+该检查不等于完整 ABI 认证，产物仍标记 `device_tested=false`。
 编译成功、配置一致、CRC 对照通过，均不能保证手机开机。
 
 下载 `lineage-mondrian-installer-and-reports` 查看安装包、ABI 报告和配置差异。
+`retained-module-crcs.json` 记录现有模块 CRC 比较结果。
 不要把用于对照的 `baseline` artifact 当成容器补丁内核。
 CI 失败时查看 `baseline` / `patched` artifact 的 `build.log` 和配置差异；
 不要通过伪造版本、关闭 MODVERSIONS 或忽略失败来绕过检查。
