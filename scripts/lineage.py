@@ -302,6 +302,8 @@ def check_retained_modules(reference, symvers):
     return {
         "status": "matched" if not missing and not mismatched else "mismatch",
         "unique_modules": reference["unique_modules"],
+        "versioned_modules": reference.get("versioned_modules", reference["unique_modules"]),
+        "modules_without_version_records": reference.get("modules_without_version_records", []),
         "kernel_crc_requirements": len(required),
         "missing": missing, "mismatched": mismatched,
         "scope": reference["scope"],
@@ -471,6 +473,7 @@ def package(args):
     write_json(output / "manifest.json", {
         **manifest, "abi_status": "baseline_symbol_crcs_unchanged",
         "stock_rom_module_crcs_checked": True, "device_tested": False,
+        "modules_without_version_records": stock_report["modules_without_version_records"],
         "anykernel_ref": actual,
     })
     installer = ROOT / "scripts/lineage-anykernel.sh"

@@ -96,7 +96,8 @@ new file mode 100644
     def test_retained_module_check_requires_matching_core_exports(self):
         reference = {
             "kernel_required_crcs": {"core": "0x1234", "module_layout": "0x4567"},
-            "unique_modules": 2, "scope": "test fixture",
+            "unique_modules": 3, "versioned_modules": 2,
+            "modules_without_version_records": ["kernelsu.ko"], "scope": "test fixture",
         }
         with tempfile.TemporaryDirectory() as temporary:
             symvers = Path(temporary) / "Module.symvers"
@@ -104,7 +105,10 @@ new file mode 100644
                 "0x1234 core vmlinux EXPORT_SYMBOL\n"
                 "0x4567 module_layout vmlinux EXPORT_SYMBOL\n"
             )
-            self.assertEqual(lineage.check_retained_modules(reference, symvers)["status"], "matched")
+            report = lineage.check_retained_modules(reference, symvers)
+            self.assertEqual(report["status"], "matched")
+            self.assertEqual(report["versioned_modules"], 2)
+            self.assertEqual(report["modules_without_version_records"], ["kernelsu.ko"])
             symvers.write_text("0xffff core vmlinux EXPORT_SYMBOL\n")
             report = lineage.check_retained_modules(reference, symvers)
             self.assertEqual(report["status"], "mismatch")

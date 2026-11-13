@@ -3,6 +3,10 @@
   "kernel_ref": "eff4b40407a1b6f1b1ab84554cbb540bcb495175",
   "kernel_release": "5.10.269-gki-geff4b40407a1",
   "unique_modules": 391,
+  "versioned_modules": 390,
+  "modules_without_version_records": [
+    "kernelsu.ko"
+  ],
   "kernel_required_crcs": {
     "PDE_DATA": "0xfb24a559",
     "__ClearPageMovable": "0x0a13802d",

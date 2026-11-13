@@ -44,7 +44,9 @@ GitHub 路线：
 这是遵循设备参数的独立 Kbuild 流程，**不是完整 LineageOS ROM 构建**。
 它不重新编译高通外部模块；保留这些模块的前提是补丁保持其依赖的内核接口。
 额外参考来自当前设备的 vendor_dlkm、vendor_boot DLKM ramdisk 和 boot 中的 KernelSU LKM：
-391 个去重模块，2725 项内核符号 CRC 要求。记录只包含模块名、代码哈希、vermagic 和符号信息，
+共 391 个去重模块，其中 390 个 ROM 模块提供 2725 项内核符号 CRC 要求。
+当前 KernelSU LKM 的版本记录为空，单独列为无法通过 CRC 核验的模块，root 仍需实际启动确认。
+记录只包含模块名、代码哈希、vermagic 和符号信息，
 不包含手机序列号或原始分区镜像。
 该检查不等于完整 ABI 认证，产物仍标记 `device_tested=false`。
 编译成功、配置一致、CRC 对照通过，均不能保证手机开机。

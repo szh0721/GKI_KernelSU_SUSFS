@@ -73,6 +73,10 @@ def main():
     result = {
         "schema": 1, "kernel_ref": args.kernel_ref, "kernel_release": args.kernel_release,
         "unique_modules": len(modules),
+        "versioned_modules": sum(bool(module["imports"]) for module in modules.values()),
+        "modules_without_version_records": sorted(
+            module["name"] for module in modules.values() if not module["imports"]
+        ),
         "kernel_required_crcs": dict(sorted(required.items())),
         "retained_module_exports": sorted(retained_exports),
         "modules": [

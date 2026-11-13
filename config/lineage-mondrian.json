@@ -14,7 +14,7 @@
   "running_config": "config/lineage-mondrian-running.config",
   "running_config_sha256": "ffa3714d70954f1dc6d2463d439158beabb7fe869572e9b52ee433a242ecce72",
   "module_reference": "config/lineage-mondrian-module-reference.json",
-  "module_reference_sha256": "d7e93104be61c4cb857eb4b5920c0f4aa14d3ff2719613f7d5ef77221e974a14",
+  "module_reference_sha256": "d0e1874f5792ac3a6adcc51ca172ca97d6303d614fc8aba8a9336c7143426f7b",
   "clang_ref": "29182889399818f97baa65ea238c80e8117981eb",
   "clang_directory": "clang-r596125",
   "anykernel_ref": "41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1",
