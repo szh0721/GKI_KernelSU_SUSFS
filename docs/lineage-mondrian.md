@@ -23,6 +23,8 @@
 在 Actions 的 `Android 内核构建-自定义` 中：
 
 1. `build_backend` 选择 `lineage-mondrian`。
+   `lineage_build_backend` 默认 `github`；选 `patches-only` 只检查并导出补丁，
+   选 `self-hosted` 使用准备好的本地 Linux runner。
 2. `droidspaces` 选择 `678`。
 3. 按需打开 `droidspaces_ntsync`。
 4. `use_networking` 在这个后端只表示容器 NAT/macvlan/firewall 配置，不包含原 GKI 入口的 BBRv3。

@@ -14,6 +14,14 @@ on:
           - gki
           - lineage-mondrian
         default: gki
+      lineage_build_backend:
+        description: "LineageOS execution mode (ignored for the original GKI backend)"
+        type: choice
+        options:
+          - github
+          - patches-only
+          - self-hosted
+        default: github
       # ==================== 下拉选项 ====================
       kernel_version:
         description: "内核版本"
@@ -279,4 +287,4 @@ jobs:
       droidspaces: ${{ inputs.droidspaces || '678' }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
       container_networking: ${{ inputs.use_networking || false }}
-      build_backend: github
+      build_backend: ${{ inputs.lineage_build_backend || 'github' }}
