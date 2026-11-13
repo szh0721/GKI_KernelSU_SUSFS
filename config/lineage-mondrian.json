@@ -1,0 +1,27 @@
+{
+  "device": "mondrian",
+  "kernel_repository": "LineageOS/android_kernel_xiaomi_sm8450",
+  "kernel_ref": "eff4b40407a1b6f1b1ab84554cbb540bcb495175",
+  "kernel_source": "kernel/xiaomi/sm8450",
+  "board_config": "device/xiaomi/mondrian/BoardConfig.mk",
+  "config_fragments": [
+    "gki_defconfig",
+    "vendor/waipio_GKI.config",
+    "vendor/xiaomi_GKI.config",
+    "vendor/mondrian_GKI.config",
+    "vendor/debugfs.config"
+  ],
+  "running_config": "config/lineage-mondrian-running.config",
+  "running_config_sha256": "ffa3714d70954f1dc6d2463d439158beabb7fe869572e9b52ee433a242ecce72",
+  "clang_ref": "29182889399818f97baa65ea238c80e8117981eb",
+  "clang_directory": "clang-r596125",
+  "anykernel_ref": "41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1",
+  "droidspaces": {
+    "repository": "ravindu644/Droidspaces-OSS",
+    "ref": "cdadb9eb5d0f86aacffff60776333e6f6b73a30a"
+  },
+  "ntsync": {
+    "repository": "Goldzxcbug/Droidspaces_Kernel_patch",
+    "ref": "dc0f76bedd790b7738e5695509297ee71ca4a2c2"
+  }
+}

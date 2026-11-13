@@ -59,6 +59,7 @@ Wiki 涵盖内容：
 - 🆘 救砖指南
 - 📊 内核版本兼容性说明
 - 🧩 [**进阶功能文档**](docs/advanced-features.md)：GhostLock 安全修复、Droidspaces 容器支持、自定义提交配置、伪装 `/proc/config.gz`
+- [**LineageOS / K60 构建**](docs/lineage-mondrian.md)：GitHub runner 优先，Droidspaces 可选补丁，不集成 SUSFS
 
 ---
 

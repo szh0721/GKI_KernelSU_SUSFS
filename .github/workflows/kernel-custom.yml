@@ -7,6 +7,13 @@ permissions:
 on:
   workflow_dispatch:
     inputs:
+      build_backend:
+        description: "Build target (LineageOS: mondrian, no SUSFS, root stays separate)"
+        type: choice
+        options:
+          - gki
+          - lineage-mondrian
+        default: gki
       # ==================== 下拉选项 ====================
       kernel_version:
         description: "内核版本"
@@ -106,7 +113,7 @@ on:
         type: boolean
         default: false
       use_networking:
-        description: "启用网络增强（BBRv3 / IPSet / Qdisc / CIFS）"
+        description: "GKI: BBRv3 / IPSet / Qdisc / CIFS；LineageOS: 容器 NAT / firewall"
         required: false
         type: boolean
         default: false
@@ -128,6 +135,7 @@ on:
 
 jobs:
   resolve-version:
+    if: inputs.build_backend != 'lineage-mondrian'
     runs-on: ubuntu-24.04
     outputs:
       android_version: ${{ steps.resolve.outputs.android_version }}
@@ -202,6 +210,7 @@ jobs:
           PY
 
   build-custom-kernel:
+    if: inputs.build_backend != 'lineage-mondrian'
     name: "${{ needs.resolve-version.outputs.kernel_full }}-${{ needs.resolve-version.outputs.android_version }}-${{ inputs.os_patch_level }}"
     needs: resolve-version
     uses: ./.github/workflows/build.yml
@@ -230,7 +239,17 @@ jobs:
       artifact_upload_mode: ${{ inputs.artifact_upload_mode }}
 
   get-ksu-manager:
+    if: inputs.build_backend != 'lineage-mondrian'
     uses: ./.github/workflows/get-manager.yml
     secrets: inherit
     with:
       kernelsu_variant: ${{ inputs.kernelsu_variant }}
+
+  lineage-mondrian:
+    if: inputs.build_backend == 'lineage-mondrian'
+    uses: ./.github/workflows/kernel-lineage-mondrian.yml
+    with:
+      droidspaces: ${{ inputs.droidspaces || '678' }}
+      droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
+      container_networking: ${{ inputs.use_networking || false }}
+      build_backend: github

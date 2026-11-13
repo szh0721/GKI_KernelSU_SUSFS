@@ -1,0 +1,268 @@
+name: LineageOS mondrian - Droidspaces
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_ref:
+        description: "LineageOS sm8450 kernel commit (full SHA)"
+        required: true
+        type: string
+        default: "eff4b40407a1b6f1b1ab84554cbb540bcb495175"
+      droidspaces:
+        description: "Droidspaces kABI padding slots (not A/B partitions)"
+        type: choice
+        options:
+          - "678"
+          - "345"
+          - "123"
+          - "off"
+        default: "678"
+      droidspaces_ntsync:
+        description: "Also check/apply the original NTSync backport (experimental)"
+        type: boolean
+        default: false
+      container_networking:
+        description: "Enable Droidspaces GKI NAT, macvlan and firewall options"
+        type: boolean
+        default: false
+      build_backend:
+        description: "Hosted runner first; self-hosted needs a prepared LineageOS tree"
+        type: choice
+        options:
+          - github
+          - self-hosted
+          - patches-only
+        default: github
+  workflow_call:
+    inputs:
+      kernel_ref:
+        type: string
+        default: "eff4b40407a1b6f1b1ab84554cbb540bcb495175"
+      droidspaces:
+        type: string
+        default: "678"
+      droidspaces_ntsync:
+        type: boolean
+        default: false
+      container_networking:
+        type: boolean
+        default: false
+      build_backend:
+        type: string
+        default: github
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout build tools
+        uses: actions/checkout@v7
+        with:
+          path: builder
+
+      - name: Checkout the actual LineageOS kernel files
+        uses: actions/checkout@v7
+        with:
+          repository: LineageOS/android_kernel_xiaomi_sm8450
+          ref: ${{ inputs.kernel_ref }}
+          path: kernel
+          sparse-checkout: |
+            include
+            drivers/misc
+            kernel/locking
+
+      - name: Validate the entire selected patch series
+        env:
+          KERNEL_REF: ${{ inputs.kernel_ref }}
+          DROIDSPACES: ${{ inputs.droidspaces }}
+          NTSYNC: ${{ inputs.droidspaces_ntsync }}
+          NETWORKING: ${{ inputs.container_networking }}
+        run: |
+          args=()
+          if [[ "$NTSYNC" == "true" ]]; then args+=(--ntsync); fi
+          if [[ "$NETWORKING" == "true" ]]; then args+=(--networking); fi
+          python3 builder/scripts/lineage.py prepare \
+            --kernel-source kernel --kernel-ref "$KERNEL_REF" \
+            --output bundle --droidspaces "$DROIDSPACES" "${args[@]}"
+
+      - name: Upload verified patches and configuration
+        uses: actions/upload-artifact@v6
+        with:
+          name: lineage-mondrian-patches
+          path: bundle/
+          if-no-files-found: error
+          retention-days: 14
+
+  cloud-build:
+    if: inputs.build_backend == 'github'
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [baseline, patched]
+    steps:
+      - name: Free hosted runner disk and add swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift
+          sudo apt-get clean
+          free_gib=$(df --output=avail -BG "$RUNNER_TEMP" | tail -1 | tr -dc '0-9')
+          swap_gib=$((free_gib - 24))
+          if ((swap_gib > 32)); then swap_gib=32; fi
+          if ((swap_gib < 16)); then
+            echo "::error::Insufficient disk for swap plus an unmodified Full LTO/debug build."
+            exit 1
+          fi
+          sudo fallocate -l "${swap_gib}G" "$RUNNER_TEMP/lineage.swap"
+          sudo chmod 600 "$RUNNER_TEMP/lineage.swap"
+          sudo mkswap "$RUNNER_TEMP/lineage.swap"
+          sudo swapon "$RUNNER_TEMP/lineage.swap"
+          df -h
+          free -h
+
+      - name: Install Kbuild dependencies
+        run: |
+          sudo apt-get update -o Acquire::Retries=5
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential cpio flex git kmod libelf-dev \
+            libssl-dev lz4 python3 rsync unzip xz-utils zip zstd dwarves
+
+      - name: Checkout build tools
+        uses: actions/checkout@v7
+        with:
+          path: builder
+
+      - name: Checkout the exact LineageOS kernel
+        uses: actions/checkout@v7
+        with:
+          repository: LineageOS/android_kernel_xiaomi_sm8450
+          ref: ${{ inputs.kernel_ref }}
+          path: kernel
+
+      - name: Download checked patches
+        uses: actions/download-artifact@v8
+        with:
+          name: lineage-mondrian-patches
+          path: bundle
+
+      - name: Download pinned Android clang
+        run: |
+          url=$(python3 - <<'PY'
+          import json
+          p = json.load(open("builder/config/lineage-mondrian.json"))
+          print("https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/"
+                + p["clang_ref"] + "/" + p["clang_directory"] + ".tar.gz")
+          PY
+          )
+          curl -fL --retry 5 --retry-all-errors --connect-timeout 30 \
+            "$url" -o "$RUNNER_TEMP/clang.tar.gz"
+          sha256sum "$RUNNER_TEMP/clang.tar.gz"
+          mkdir clang
+          tar -xzf "$RUNNER_TEMP/clang.tar.gz" -C clang
+          rm "$RUNNER_TEMP/clang.tar.gz"
+          clang/bin/clang --version
+
+      - name: Build with official ordered fragments and unchanged LTO/debug options
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          python3 builder/scripts/lineage.py cloud-build \
+            --kernel-source kernel --bundle bundle --clang clang \
+            --variant "$VARIANT" --output result --jobs 2
+
+      - name: Upload build evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lineage-mondrian-${{ matrix.variant }}
+          path: result/
+          if-no-files-found: warn
+          retention-days: 14
+
+  package:
+    needs: cloud-build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout build tools
+        uses: actions/checkout@v7
+        with:
+          path: builder
+
+      - name: Checkout pinned AnyKernel3
+        uses: actions/checkout@v7
+        with:
+          repository: osm0sis/AnyKernel3
+          ref: "41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1"
+          path: AnyKernel3
+
+      - name: Download baseline
+        uses: actions/download-artifact@v8
+        with:
+          name: lineage-mondrian-baseline
+          path: baseline
+
+      - name: Download patched build
+        uses: actions/download-artifact@v8
+        with:
+          name: lineage-mondrian-patched
+          path: patched
+
+      - name: Compare exported symbol CRCs before packaging
+        run: |
+          python3 builder/scripts/lineage.py package \
+            --baseline baseline --patched patched --anykernel AnyKernel3 --output package
+
+      - name: Upload installer and comparison reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lineage-mondrian-installer-and-reports
+          path: package/
+          if-no-files-found: warn
+          retention-days: 14
+
+  local-build:
+    if: inputs.build_backend == 'self-hosted'
+    needs: prepare
+    runs-on: [self-hosted, linux, x64, lineage]
+    timeout-minutes: 360
+    concurrency:
+      group: lineage-mondrian-source-tree
+      cancel-in-progress: false
+    steps:
+      - name: Checkout build tools
+        uses: actions/checkout@v7
+
+      - name: Download the checked patch bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: lineage-mondrian-patches
+          path: ${{ runner.temp }}/lineage-bundle-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Build using LineageOS kernel.mk and image targets
+        env:
+          LINEAGE_TREE: ${{ vars.LINEAGE_TREE }}
+          BUNDLE: ${{ runner.temp }}/lineage-bundle-${{ github.run_id }}-${{ github.run_attempt }}
+          ARTIFACTS: ${{ runner.temp }}/lineage-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          test -n "$LINEAGE_TREE" || {
+            echo "::error::Set repository variable LINEAGE_TREE to your prepared Android tree."
+            exit 1
+          }
+          python3 scripts/lineage.py build \
+            --tree "$LINEAGE_TREE" --bundle "$BUNDLE" --output "$ARTIFACTS"
+
+      - name: Upload images, provenance and build log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lineage-mondrian-kernel-${{ github.run_number }}
+          path: ${{ runner.temp }}/lineage-artifacts-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: warn
+          retention-days: 14
