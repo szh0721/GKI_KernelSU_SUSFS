@@ -19,6 +19,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 PROFILE = ROOT / "config" / "lineage-mondrian.json"
+ZRAM_LIST_PATCH = ROOT / "patches/lineage-mondrian/zram-visible-algorithms.patch"
 CORE_CONFIG = (
     "SYSVIPC", "POSIX_MQUEUE", "IPC_NS", "PID_NS", "DEVTMPFS", "USER_NS",
 )
@@ -275,6 +276,10 @@ def prepare(args):
             content = download(url)
             overlays[Path(destination)] = content
             provenance.append({"url": url, "sha256": sha256(content), "destination": destination})
+        content = ZRAM_LIST_PATCH.read_bytes()
+        patches.append((ZRAM_LIST_PATCH.name, content))
+        provenance.append({"local_patch": str(ZRAM_LIST_PATCH.relative_to(ROOT)),
+                           "sha256": sha256(content)})
     combined, paths = compose_patch(source, patches, overlays, includes)
     fragment = ("# Generated Droidspaces configuration for LineageOS mondrian.\n"
                 + "\n".join(configs) + "\n").encode()
@@ -504,12 +509,103 @@ def cloud_build(args):
     ):
         shutil.copyfile(path, output / name)
     shutil.copyfile(bundle / "manifest.json", output / "manifest.json")
+    if args.variant == "patched" and manifest["selection"].get("zram"):
+        module = output / "zram.ko"
+        shutil.copyfile(kernel_out / "drivers/block/zram/zram.ko", module)
+        run(str(clang / "bin/llvm-strip"), "--strip-debug", str(module))
     write_json(output / "build-result.json", {
         "variant": args.variant, "compiler": compiler, "kernel_ref": manifest["kernel_ref"],
         "config_fragments": profile["config_fragments"], "make": make,
         "device_tested": False, "vendor_modules_rebuilt": False,
         "toolchain_ref": profile["clang_ref"],
     })
+
+
+def refresh_zram(args):
+    """Rebuild just the modular ZRAM driver against an existing verified build."""
+    source, previous = args.kernel_source.resolve(), args.previous.resolve()
+    output, clang, bundle = args.output.resolve(), args.clang.resolve(), args.bundle.resolve()
+    manifest = checked_bundle(bundle)
+    if load_json(previous / "manifest.json") != manifest or not manifest["selection"].get("zram"):
+        raise ValueError("ZRAM refresh requires the exact original ZRAM-enabled patch bundle.")
+    clean_source(source, manifest["kernel_ref"])
+    verify_config(previous / "kernel.config", manifest["configs"])
+    profile = load_json(PROFILE)
+    compiler = run(str(clang / "bin/clang"), "--version").decode().splitlines()[0]
+    if compiler != load_json(previous / "build-result.json")["compiler"]:
+        raise ValueError("ZRAM refresh compiler differs from the original kernel build.")
+    if output.exists() and any(output.iterdir()):
+        raise ValueError("ZRAM refresh output must be new or empty.")
+    patch = (bundle / "kernel.patch").read_bytes()
+    run("git", "apply", "--check", "--whitespace=nowarn", cwd=source, data=patch)
+    run("git", "apply", "--whitespace=nowarn", cwd=source, data=patch)
+    listing = ZRAM_LIST_PATCH.read_bytes()
+    run("git", "apply", "--check", "--whitespace=nowarn", cwd=source, data=listing)
+    run("git", "apply", "--whitespace=nowarn", cwd=source, data=listing)
+    kernel_out = source.parent / "kernel-out-zram-refresh"
+    if kernel_out.exists() and any(kernel_out.iterdir()):
+        raise ValueError("ZRAM refresh kernel output must be empty.")
+    kernel_out.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(previous / "kernel.config", kernel_out / ".config")
+    environment = os.environ.copy()
+    for name in ("LOCALVERSION", "KCONFIG_CONFIG"):
+        environment.pop(name, None)
+    environment["PATH"] = str(clang / "bin") + os.pathsep + environment["PATH"]
+    environment["LD_LIBRARY_PATH"] = str(clang / "lib64")
+    make = ["make", "-C", str(source), f"O={kernel_out}", "ARCH=arm64",
+            "LLVM=1", "LLVM_IAS=1", "CLANG_TRIPLE=aarch64-linux-gnu-",
+            "TARGET_PRODUCT=mondrian", "TARGET_BOARD_PLATFORM=taro"]
+    output.mkdir(parents=True, exist_ok=True)
+    with (output / "zram-build.log").open("wb") as log:
+        for command in (make + ["olddefconfig"], make + ["-j2", "modules_prepare"]):
+            subprocess.run(command, env=environment, stdout=log, stderr=subprocess.STDOUT, check=True)
+        differences = config_diff(read_config(previous / "kernel.config"),
+                                  read_config(kernel_out / ".config"))
+        if differences:
+            write_json(output / "zram-config-diff.json", differences)
+            raise ValueError("Module-only refresh changed the kernel configuration.")
+        shutil.copyfile(previous / "Module.symvers", kernel_out / "Module.symvers")
+        subprocess.run(make + ["-j2", f"M={source / 'drivers/block/zram'}", "modules"],
+                       env=environment, stdout=log, stderr=subprocess.STDOUT, check=True)
+    for path in previous.iterdir():
+        if path.is_file():
+            shutil.copyfile(path, output / path.name)
+    module = output / "zram.ko"
+    shutil.copyfile(source / "drivers/block/zram/zram.ko", module)
+    run(str(clang / "bin/llvm-strip"), "--strip-debug", str(module))
+    write_json(output / "zram-build-result.json", {
+        "kernel_ref": manifest["kernel_ref"], "compiler": compiler,
+        "kernel_image_sha256": file_sha256(output / "Image"),
+        "kernel_image_reused": True, "configuration_unchanged": True,
+        "module_sha256": file_sha256(module),
+        "listing_patch_sha256": file_sha256(ZRAM_LIST_PATCH),
+        "toolchain_ref": profile["clang_ref"], "device_tested": False,
+    })
+    print(f"Rebuilt ZRAM module without changing the kernel Image: {module}")
+
+
+def check_zram_module(module, symvers):
+    profile = load_json(PROFILE)
+    reference_path = ROOT / profile["zram_module_reference"]
+    if file_sha256(reference_path) != profile["zram_module_reference_sha256"]:
+        raise ValueError("ZRAM module reference checksum changed.")
+    reference = load_json(reference_path)
+    current = json.loads(run(sys.executable, str(ROOT / "scripts/lineage_module_reference.py"),
+                             "inspect", str(module)))
+    if current["imports"] != reference["imports"] or current["exports"]:
+        raise ValueError("Replacement ZRAM module CRC requirements differ from the stock driver.")
+    if current["vermagic"].split(maxsplit=1)[1] != reference["vermagic"].split(maxsplit=1)[1]:
+        raise ValueError("Replacement ZRAM module vermagic flags differ from the stock driver.")
+    exports = {line.split()[1]: line.split()[0] for line in symvers.read_text().splitlines()}
+    if any(int(exports.get(name, "-1"), 16) != int(crc, 16)
+           for name, crc in current["imports"].items()):
+        raise ValueError("Replacement ZRAM module imports do not match the built kernel/modules.")
+    return {"status": "matched", "imports_checked": len(current["imports"]),
+            "sha256": file_sha256(module), "vermagic": current["vermagic"],
+            "stock_module_sha256": reference["sha256"],
+            "stock_zsmalloc_sha256": reference["zsmalloc_sha256"],
+            "installation": "vendor_boot DLKM ramdisk; first-stage modules.load",
+            "device_tested": False}
 
 
 def package(args):
@@ -540,6 +636,10 @@ def package(args):
     write_json(output / "retained-module-crcs.json", stock_report)
     if stock_report["status"] != "matched":
         raise ValueError("New kernel does not match retained module CRCs; refusing the installer.")
+    zram_report = None
+    if manifest["selection"].get("zram"):
+        zram_report = check_zram_module(patched / "zram.ko", patched / "Module.symvers")
+        write_json(output / "zram-module-report.json", zram_report)
     actual = run("git", "rev-parse", "HEAD", cwd=anykernel).decode().strip()
     if actual != profile["anykernel_ref"]:
         raise ValueError("AnyKernel3 checkout differs from the pinned version.")
@@ -551,6 +651,7 @@ def package(args):
         "stock_rom_module_crcs_checked": True, "device_tested": False,
         "modules_without_version_records": stock_report["modules_without_version_records"],
         "anykernel_ref": actual,
+        "zram_module": zram_report,
     })
     installer = ROOT / "scripts/lineage-anykernel.sh"
     archive = output / "AnyKernel3-mondrian-LineageOS-Droidspaces.zip"
@@ -564,6 +665,13 @@ def package(args):
             archive_file.write(path, str(relative))
         archive_file.write(installer, "anykernel.sh")
         archive_file.write(patched / "Image", "Image")
+        if zram_report:
+            archive_file.write(patched / "zram.ko", "lineage-zram/zram.ko")
+            script = (ROOT / "scripts/lineage-zram-install.sh").read_text()
+            script = script.replace("@STOCK_ZRAM_SHA256@", zram_report["stock_module_sha256"])
+            script = script.replace("@STOCK_ZSMALLOC_SHA256@", zram_report["stock_zsmalloc_sha256"])
+            script = script.replace("@NEW_ZRAM_SHA256@", zram_report["sha256"])
+            archive_file.writestr("lineage-zram/install.sh", script)
     (output / "SHA256SUMS").write_text("\n".join(
         f"{file_sha256(path)}  {path.name}"
         for path in sorted(output.iterdir()) if path.is_file() and path.name != "SHA256SUMS"
@@ -739,6 +847,13 @@ def main():
     cloud_parser.add_argument("--variant", choices=("baseline", "patched"), required=True)
     cloud_parser.add_argument("--jobs", type=int, choices=range(1, 9), default=2)
     cloud_parser.set_defaults(function=cloud_build)
+    refresh_parser = commands.add_parser("refresh-zram", help="Rebuild ZRAM against an existing build.")
+    refresh_parser.add_argument("--kernel-source", type=Path, required=True)
+    refresh_parser.add_argument("--previous", type=Path, required=True)
+    refresh_parser.add_argument("--bundle", type=Path, required=True)
+    refresh_parser.add_argument("--clang", type=Path, required=True)
+    refresh_parser.add_argument("--output", type=Path, required=True)
+    refresh_parser.set_defaults(function=refresh_zram)
     package_parser = commands.add_parser("package", help="Gate an Image-only installer on baseline CRCs.")
     package_parser.add_argument("--baseline", type=Path, required=True)
     package_parser.add_argument("--patched", type=Path, required=True)
@@ -748,7 +863,7 @@ def main():
     args = parser.parse_args()
     try:
         args.function(args)
-    except (RuntimeError, ValueError, OSError) as error:
+    except (RuntimeError, ValueError, OSError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"error: {error}\n")
 
 

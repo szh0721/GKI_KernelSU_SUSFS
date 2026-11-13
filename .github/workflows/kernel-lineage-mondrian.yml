@@ -31,7 +31,7 @@ on:
         type: boolean
         default: false
       use_zram:
-        description: "Add LZ4K/LZ4KD/LZ4K_OPLUS/842/LZ4HC; retain stock ZRAM modules"
+        description: "Add ZRAM algorithms and update its module list for Scene (boot + vendor_boot)"
         type: boolean
         default: false
       build_backend:
@@ -42,6 +42,10 @@ on:
           - self-hosted
           - patches-only
         default: github
+      reuse_run_id:
+        description: "Optional verified run ID: reuse its kernel and rebuild only ZRAM"
+        type: string
+        default: ""
   workflow_call:
     inputs:
       kernel_ref:
@@ -65,6 +69,9 @@ on:
       build_backend:
         type: string
         default: github
+      reuse_run_id:
+        type: string
+        default: ""
 
 jobs:
   prepare:
@@ -89,6 +96,7 @@ jobs:
             net/ipv4
             lib
             crypto
+            drivers/block/zram
 
       - name: Validate the entire selected patch series
         env:
@@ -117,7 +125,7 @@ jobs:
           retention-days: 14
 
   cloud-build:
-    if: inputs.build_backend == 'github'
+    if: inputs.build_backend == 'github' && inputs.reuse_run_id == ''
     needs: prepare
     runs-on: ubuntu-24.04
     timeout-minutes: 330
@@ -204,8 +212,111 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  zram-refresh:
+    if: inputs.build_backend == 'github' && inputs.reuse_run_id != ''
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Validate reuse mode
+        env:
+          RUN_ID: ${{ inputs.reuse_run_id }}
+          ZRAM: ${{ inputs.use_zram }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$RUN_ID" =~ ^[0-9]+$ && "$ZRAM" == "true" ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" \
+            --jq '.conclusion' | grep -qx success
+
+      - name: Checkout build tools
+        uses: actions/checkout@v7
+        with:
+          path: builder
+
+      - name: Checkout the exact LineageOS kernel
+        uses: actions/checkout@v7
+        with:
+          repository: LineageOS/android_kernel_xiaomi_sm8450
+          ref: ${{ inputs.kernel_ref }}
+          path: kernel
+
+      - name: Download the verified baseline, kernel and original patch bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.reuse_run_id }}
+        run: |
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name lineage-mondrian-baseline --dir baseline
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name lineage-mondrian-patched --dir previous
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name lineage-mondrian-patches --dir original-bundle
+
+      - name: Validate requested features against the reused kernel
+        env:
+          DROIDSPACES: ${{ inputs.droidspaces }}
+          NTSYNC: ${{ inputs.droidspaces_ntsync }}
+          NETWORKING: ${{ inputs.container_networking }}
+          ADVANCED_NETWORKING: ${{ inputs.advanced_networking }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          m = json.loads(Path("previous/manifest.json").read_text())
+          selected = m["selection"]
+          for name, env in (("droidspaces", "DROIDSPACES"), ("ntsync", "NTSYNC"),
+                            ("networking", "NETWORKING"),
+                            ("advanced_networking", "ADVANCED_NETWORKING")):
+              expected = os.environ[env]
+              if name != "droidspaces":
+                  expected = expected == "true"
+              if selected.get(name) != expected:
+                  raise SystemExit(f"Reused kernel does not match requested {name}.")
+          PY
+
+      - name: Install module build dependencies and pinned Android clang
+        run: |
+          sudo apt-get update -o Acquire::Retries=5
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential flex libelf-dev libssl-dev
+          url=$(python3 - <<'PY'
+          import json
+          p = json.load(open("builder/config/lineage-mondrian.json"))
+          print("https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/"
+                + p["clang_ref"] + "/" + p["clang_directory"] + ".tar.gz")
+          PY
+          )
+          curl -fL --retry 5 --retry-all-errors --connect-timeout 30 "$url" -o clang.tar.gz
+          mkdir clang
+          tar -xzf clang.tar.gz -C clang
+
+      - name: Rebuild only the modular ZRAM driver
+        run: |
+          python3 builder/scripts/lineage.py refresh-zram \
+            --kernel-source kernel --previous previous --bundle original-bundle \
+            --clang clang --output patched
+
+      - name: Upload baseline
+        uses: actions/upload-artifact@v6
+        with:
+          name: lineage-mondrian-baseline
+          path: baseline/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload refreshed build evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lineage-mondrian-patched
+          path: patched/
+          if-no-files-found: warn
+          retention-days: 14
+
   package:
-    needs: cloud-build
+    needs: [cloud-build, zram-refresh]
+    if: always() && (needs.cloud-build.result == 'success' || needs.zram-refresh.result == 'success')
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout build tools
@@ -234,6 +345,8 @@ jobs:
 
       - name: Compare exported symbol CRCs before packaging
         run: |
+          sudo apt-get update -o Acquire::Retries=5
+          sudo apt-get install -y --no-install-recommends python3-pyelftools
           python3 builder/scripts/lineage.py package \
             --baseline baseline --patched patched --anykernel AnyKernel3 --output package
 

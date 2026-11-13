@@ -28,7 +28,8 @@
 2. `droidspaces` 选择 `678`。
 3. 按需打开 `droidspaces_ntsync`。
 4. `use_networking` 开启完整网络增强：BBRv3、IPSet、CAKE、WireGuard、CIFS，以及容器 NAT/macvlan/firewall。
-5. `use_zram` 增加 LZ4K、LZ4KD、LZ4K_OPLUS、842、LZ4HC 算法支持，保留原有 ZRAM 模块。
+5. `use_zram` 增加 LZ4K、LZ4KD、LZ4K_OPLUS、842、LZ4HC，并更新 ZRAM 模块列表供 Scene 选择。
+   此选项的 AK3 同时更新 `boot` 和 `vendor_boot`。
 6. `ksu_mode` 选 `禁用SUSFS`。LineageOS 后端始终不集成 KernelSU 或 SUSFS，保留现有 LKM root。
 
 内核版本仍应选 `5.10`。其他尚未移植的 GKI 选项（BBG、KPM、
@@ -64,7 +65,8 @@ GitHub 路线：
 4. 使用固定的 Android clang r596125，运行标准 Kbuild `Image modules`。
 5. 保留原调试信息和 Full LTO，增加最高 32 GiB swap；不保证所有 runner 都有足够资源。
 6. 比较两个版本 `Module.symvers` 的已有符号，并核对手机现有模块要求的内核符号 CRC。
-7. 比较通过后生成设备受限的 AnyKernel3 包，保留原有 ramdisk、vendor_boot、vendor_dlkm 和设备模块。
+7. 比较通过后生成设备受限的 AnyKernel3 包。启用 ZRAM 增强时还更新 `vendor_boot`
+   中的 ZRAM 模块和正常启动加载列表，其余模块和 `vendor_dlkm` 保持原样。
 
 这是遵循设备参数的独立 Kbuild 流程，**不是完整 LineageOS ROM 构建**。
 它不重新编译高通外部模块；保留这些模块的前提是补丁保持其依赖的内核接口。
@@ -111,10 +113,23 @@ BBRv3 使用固定的 WildKernels 5.10 LTS 补丁；只调整 `sysctl_net_ipv4.c
 ZRAM 增强只应用 SukiSU 补丁的 `lib` / `crypto` 部分并加入算法源码。
 明确排除其 `kernel/module.c` 中绕过 CRC 检查的逻辑，以及 ZRAM 内建化、黑名单和默认算法修改。
 `CONFIG_ZRAM=m`、`CONFIG_ZSMALLOC=m` 和原 LZ4 库保持原状。
-原版 `zram.ko` 通过 Crypto API 接受新增算法，无需替换 vendor_boot/vendor_dlkm。
-新增名称不一定出现在原模块的静态算法列表中，选中后会显示在方括号内；
-当前生效算法仍由 ROM/Scene 等配置决定，本工具不修改正在使用的 swap。
+另用 `patches/lineage-mondrian/zram-visible-algorithms.patch` 只扩展 `zcomp.c` 的静态列表，
+保留默认算法、驱动逻辑和模块校验。构建导出新的 `zram.ko`。
+打包时要求其 94 项导入 CRC 与原版完全相同，且匹配本次内核/模块的符号表。
+AK3 检查现有 ZRAM/zsmalloc 哈希和依赖后，将新驱动装入 `vendor_boot` DLKM ramdisk，
+并在 `modules.load` 追加 `zram`，使用 Android 原生第一阶段模块加载机制。
+之后的 vendor modprobe 复用已加载模块，因此不必改写 `vendor_dlkm`。
+安装后需要重启，Scene 才能读取完整列表；默认算法仍由 ROM/Scene 决定，
+安装脚本不会修改正在运行的 swap。
 内核支持算法不等于已经切换算法，不能对正在使用的 ZRAM 直接改压缩算法。
+
+对于先前已成功构建但缺少显示列表的 ZRAM 版本，可在自定义入口填写
+`lineage_reuse_run_id`（例如 `43376404308`），其余功能选择必须与该次构建完全一致。
+此模式下载成功构建的 Image、配置、Module.symvers 和补丁清单，
+以同一工具链执行标准 Kbuild `modules_prepare` 和
+`M=drivers/block/zram modules`，只增加列表补丁并重编 ZRAM。
+配置必须逐项不变，Image 原样复用，模块仍须通过全部 CRC 检查。
+常规完整编译时将该字段留空。
 
 不自动启用 `CONFIG_CFS_BANDWIDTH`、`CONFIG_CGROUP_PIDS`；
 Droidspaces 上游明确说明它们会改变 GKI kABI，现有 padding 补丁没有覆盖。

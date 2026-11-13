@@ -22,6 +22,10 @@ on:
           - patches-only
           - self-hosted
         default: github
+      lineage_reuse_run_id:
+        description: "Optional verified LineageOS run ID: rebuild only its ZRAM module"
+        type: string
+        default: ""
       # ==================== 下拉选项 ====================
       kernel_version:
         description: "内核版本"
@@ -292,3 +296,4 @@ jobs:
       advanced_networking: ${{ inputs.use_networking || false }}
       use_zram: ${{ inputs.use_zram || false }}
       build_backend: ${{ inputs.lineage_build_backend || 'github' }}
+      reuse_run_id: ${{ inputs.lineage_reuse_run_id || '' }}

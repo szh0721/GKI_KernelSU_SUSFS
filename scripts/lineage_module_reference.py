@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import struct
+import sys
 
 from elftools.elf.elffile import ELFFile
 
@@ -43,6 +44,10 @@ def read_module(path):
 
 
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "inspect":
+        imports, exports, vermagic = read_module(Path(sys.argv[2]))
+        print(json.dumps({"imports": imports, "exports": sorted(exports), "vermagic": vermagic}))
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--modules", type=Path, action="append", required=True)
     parser.add_argument("--kernel-ref", required=True)

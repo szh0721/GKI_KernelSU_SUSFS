@@ -1,7 +1,11 @@
 import importlib.util
+import json
+import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SPEC = importlib.util.spec_from_file_location(
@@ -208,6 +212,74 @@ diff --git a/kernel/module.c b/kernel/module.c
             (bundle / "kernel.patch").write_text("")
             with self.assertRaisesRegex(ValueError, "checksum mismatch"):
                 lineage.checked_bundle(bundle)
+
+    def test_replacement_zram_requires_all_stock_import_crcs(self):
+        profile = lineage.load_json(lineage.PROFILE)
+        reference = lineage.load_json(lineage.ROOT / profile["zram_module_reference"])
+        inspection = {"imports": reference["imports"], "exports": [],
+                      "vermagic": reference["vermagic"]}
+        with tempfile.TemporaryDirectory() as temporary:
+            module, symvers = Path(temporary) / "zram.ko", Path(temporary) / "Module.symvers"
+            module.write_bytes(b"test module")
+            symvers.write_text("".join(f"{crc} {name} vmlinux EXPORT_SYMBOL\n"
+                                      for name, crc in reference["imports"].items()))
+            with patch.object(lineage, "run", return_value=json.dumps(inspection).encode()):
+                report = lineage.check_zram_module(module, symvers)
+                self.assertEqual(report["imports_checked"], 94)
+                self.assertEqual(report["status"], "matched")
+                symvers.write_text("0x0 module_layout vmlinux EXPORT_SYMBOL\n")
+                with self.assertRaisesRegex(ValueError, "do not match"):
+                    lineage.check_zram_module(module, symvers)
+            inspection["imports"] = {**reference["imports"], "unexpected_import": "0x0"}
+            with patch.object(lineage, "run", return_value=json.dumps(inspection).encode()):
+                with self.assertRaisesRegex(ValueError, "differ from the stock"):
+                    lineage.check_zram_module(module, symvers)
+
+    def test_vendor_ramdisk_installer_is_repeatable_and_refuses_unknown_modules(self):
+        original, dependency, replacement = b"stock zram", b"stock allocator", b"new zram"
+        script = (lineage.ROOT / "scripts/lineage-zram-install.sh").read_text()
+        for name, content in (("STOCK_ZRAM", original), ("STOCK_ZSMALLOC", dependency),
+                              ("NEW_ZRAM", replacement)):
+            script = script.replace(f"@{name}_SHA256@", lineage.sha256(content))
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            modules = home / "vendor_ramdisk/dlkm/lib/modules"
+            modules.mkdir(parents=True)
+            (modules / "zram.ko").write_bytes(original)
+            (modules / "zsmalloc.ko").write_bytes(dependency)
+            (modules / "modules.dep").write_text(
+                "/lib/modules/zram.ko: /lib/modules/zsmalloc.ko\n")
+            (modules / "modules.load").write_text("required_boot_driver\n")
+            payload = home / "lineage-zram"
+            payload.mkdir()
+            (payload / "zram.ko").write_bytes(replacement)
+            installer = payload / "install.sh"
+            installer.write_text(script)
+            tools = home / "test-tools"
+            tools.mkdir()
+            (tools / "sha256sum").write_text('#!/bin/sh\nexec shasum -a 256 "$@"\n')
+            (tools / "sha256sum").chmod(0o755)
+            harness = """
+abort() { printf '%s\\n' "$*" >&2; exit 1; }
+ui_print() { :; }
+set_perm() { :; }
+RAMDISK="$AKHOME/ramdisk"
+VENDORRD="$AKHOME/vendor_ramdisk"
+. "$AKHOME/lineage-zram/install.sh"
+"""
+            environment = {**os.environ, "AKHOME": str(home),
+                           "PATH": str(tools) + os.pathsep + os.environ["PATH"]}
+            for _ in range(2):
+                result = subprocess.run(["sh", "-c", harness], env=environment,
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((modules / "zram.ko").read_bytes(), replacement)
+            self.assertEqual((modules / "modules.load").read_text().split().count("zram"), 1)
+            (modules / "zsmalloc.ko").write_bytes(b"different ROM")
+            result = subprocess.run(["sh", "-c", harness], env=environment, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(b"differs from this ROM", result.stderr)
+            self.assertEqual((modules / "zram.ko").read_bytes(), replacement)
 
 
 if __name__ == "__main__":

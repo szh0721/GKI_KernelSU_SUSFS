@@ -23,5 +23,19 @@ PATCH_VBMETA_FLAG=auto;
 
 . tools/ak3-core.sh;
 
+if [ -f "$AKHOME/lineage-zram/zram.ko" ]; then
+  # Prepare vendor_boot first so an unexpected ROM aborts before any writes.
+  mv "$AKHOME/Image" "$AKHOME/lineage-zram/Image" || abort "Could not stage the kernel.";
+  BLOCK=vendor_boot;
+  reset_ak;
+  dump_boot;
+  . "$AKHOME/lineage-zram/install.sh";
+  repack_ramdisk;
+  flash_boot;
+  BLOCK=boot;
+  reset_ak;
+  mv "$AKHOME/lineage-zram/Image" "$AKHOME/Image" || abort "Could not restore the staged kernel.";
+fi;
+
 dump_boot;
 write_boot;
