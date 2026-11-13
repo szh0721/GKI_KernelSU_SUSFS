@@ -30,8 +30,10 @@ if [ -f "$AKHOME/lineage-zram/zram.ko" ]; then
   reset_ak;
   dump_boot;
   . "$AKHOME/lineage-zram/install.sh";
+  NO_MAGISK_CHECK=1;
   repack_ramdisk;
   flash_boot;
+  unset NO_MAGISK_CHECK;
   BLOCK=boot;
   reset_ak;
   mv "$AKHOME/lineage-zram/Image" "$AKHOME/Image" || abort "Could not restore the staged kernel.";
