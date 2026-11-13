@@ -29,6 +29,24 @@ NETWORK_CONFIG = (
     "NETFILTER_XT_TARGET_LOG", "NETFILTER_XT_MATCH_RECENT",
     "IP_SET", "IP_SET_HASH_IP", "IP_SET_HASH_NET", "NETFILTER_XT_SET",
 )
+ADVANCED_NETWORK_CONFIG = (
+    "IP_SET_BITMAP_IP", "IP_SET_BITMAP_IPMAC", "IP_SET_BITMAP_PORT",
+    "IP_SET_HASH_IPMARK", "IP_SET_HASH_IPPORT", "IP_SET_HASH_IPPORTIP",
+    "IP_SET_HASH_IPPORTNET", "IP_SET_HASH_IPMAC", "IP_SET_HASH_MAC",
+    "IP_SET_HASH_NETPORTNET", "IP_SET_HASH_NETNET", "IP_SET_HASH_NETPORT",
+    "IP_SET_HASH_NETIFACE", "IP_SET_LIST_SET", "TCP_CONG_ADVANCED",
+    "TCP_CONG_BBR", "TCP_CONG_BBR3", "TCP_CONG_CUBIC", "TCP_CONG_BIC",
+    "TCP_CONG_WESTWOOD", "TCP_CONG_HTCP", "DEFAULT_BBR3",
+    "NET_SCH_FQ", "NET_SCH_FQ_CODEL", "NET_SCH_CAKE", "NET_ACT_CONNMARK",
+    "IP_NF_TARGET_TTL", "IP6_NF_TARGET_HL", "IP6_NF_MATCH_HL",
+    "WIREGUARD", "CIFS", "NETWORK_FILESYSTEMS", "KEYS", "CIFS_XATTR", "CIFS_POSIX",
+)
+ZRAM_CONFIG = ("CRYPTO_LZ4HC", "CRYPTO_LZ4K", "CRYPTO_LZ4KD", "CRYPTO_842",
+               "CRYPTO_LZ4K_OPLUS")
+ZRAM_PATCH_INCLUDES = {
+    "lz4kd.patch": ("lib/Kconfig", "lib/Makefile", "crypto/Kconfig", "crypto/Makefile"),
+    "lz4k_oplus.patch": ("lib/Kconfig", "lib/Makefile"),
+}
 IMAGES = ("boot.img", "vendor_boot.img", "vendor_dlkm.img", "dtbo.img", "recovery.img")
 BUILD_SCRIPT = """\
 set -eo pipefail
@@ -96,27 +114,35 @@ def kernel_version(source):
     return ".".join(values)
 
 
-def selected_configs(slot, networking, ntsync):
+def selected_configs(slot, networking, ntsync, advanced_networking=False, zram=False):
     if slot not in ("off", "678"):
         raise ValueError("The LineageOS mondrian profile supports Droidspaces 678 or off only.")
+    configs = []
     if slot == "off":
-        if networking or ntsync:
+        if networking or ntsync or advanced_networking:
             raise ValueError("Networking/NTSync require Droidspaces to be enabled.")
-        return []
-    configs = list(CORE_CONFIG)
-    if networking:
+    else:
+        configs.extend(CORE_CONFIG)
+    if networking or advanced_networking:
         configs.extend(NETWORK_CONFIG)
     if ntsync:
         configs.append("NTSYNC")
-    return [f"CONFIG_{name}=y" for name in configs]
+    if advanced_networking:
+        configs.extend(ADVANCED_NETWORK_CONFIG)
+    if zram:
+        configs.extend(ZRAM_CONFIG)
+    result = [f"CONFIG_{name}=y" for name in configs]
+    if advanced_networking:
+        result.extend(("CONFIG_IP_SET_MAX=65534", 'CONFIG_DEFAULT_TCP_CONG="bbr3"'))
+    if zram:
+        result.extend(("CONFIG_ZRAM=m", "CONFIG_ZSMALLOC=m"))
+    return result
 
 
-def patch_sources(profile, slot, ntsync):
-    if slot == "off":
-        return []
+def patch_sources(profile, slot, ntsync, advanced_networking=False, zram=False):
     slot_name = "_".join(slot)
     base = "Documentation/resources/kernel-patches/GKI/below-kernel-6.12"
-    patches = [
+    patches = [] if slot == "off" else [
         (profile["droidspaces"], f"{base}/001.GKI-below-6.12-fix_sysvipc_kabi_{slot_name}.patch"),
         (profile["droidspaces"], f"{base}/002.5.10_or_lower_use_android_abi_padding_for_posix_mqueue.patch"),
     ]
@@ -125,6 +151,12 @@ def patch_sources(profile, slot, ntsync):
             (profile["ntsync"], "NTsync/ntsync_base.patch"),
             (profile["ntsync"], "NTsync/ntsync_compat_android12-5.10.patch"),
         ])
+    if advanced_networking:
+        patches.append((profile["network"],
+                        "common/bbrv3/0001-net-tcp-backport-BBRv3-to-android12-5.10-lts.patch"))
+    if zram:
+        patches.extend((profile["zram"], f"other/zram/zram_patch/5.10/{name}")
+                       for name in ZRAM_PATCH_INCLUDES)
     return patches
 
 
@@ -139,8 +171,9 @@ def download(url):
                 raise
 
 
-def patch_paths(patch):
-    output = run("git", "apply", "--numstat", "-z", data=patch)
+def patch_paths(patch, includes=()):
+    output = run("git", "apply", "--numstat", "-z",
+                 *(f"--include={path}" for path in includes), data=patch)
     paths = []
     for entry in output.split(b"\0"):
         if not entry:
@@ -154,9 +187,12 @@ def patch_paths(patch):
     return paths
 
 
-def compose_patch(source, patches):
+def compose_patch(source, patches, overlays=None, includes=None):
     """Check a complete series in isolation before touching the Android tree."""
-    paths = sorted({path for _, content in patches for path in patch_paths(content)})
+    overlays, includes = overlays or {}, includes or {}
+    paths = sorted({path for name, content in patches
+                    for path in patch_paths(content, includes.get(name, ()))}
+                   | set(overlays))
     with tempfile.TemporaryDirectory(prefix="lineage-patch-check-") as temporary:
         scratch = Path(temporary)
         run("git", "init", "-q", str(scratch))
@@ -171,10 +207,15 @@ def compose_patch(source, patches):
             "user.email=patch-validator@localhost", "-c", "commit.gpgsign=false",
             "commit", "-q", "--allow-empty", "-m", "Patch validation baseline", cwd=scratch,
         )
+        for path, content in overlays.items():
+            (scratch / path).parent.mkdir(parents=True, exist_ok=True)
+            (scratch / path).write_bytes(content)
         for name, content in patches:
+            filters = [f"--include={path}" for path in includes.get(name, ())]
             try:
-                run("git", "apply", "--check", "--whitespace=nowarn", cwd=scratch, data=content)
-                run("git", "apply", "--whitespace=nowarn", cwd=scratch, data=content)
+                run("git", "apply", "--check", "--whitespace=nowarn",
+                    *filters, cwd=scratch, data=content)
+                run("git", "apply", "--whitespace=nowarn", *filters, cwd=scratch, data=content)
             except RuntimeError as error:
                 raise ValueError(
                     f"Patch does not apply completely: {name}\n{error}\n"
@@ -187,11 +228,21 @@ def compose_patch(source, patches):
     return combined, [str(path) for path in paths]
 
 
+def port_bbr_context(content):
+    """Only adjust unchanged context surrounding the upstream PLB insertion."""
+    old = b" static int tcp_min_rcvbuf = 4096;\n \n"
+    new = b" /* obsolete */\n static int sysctl_tcp_low_latency __read_mostly;\n"
+    if content.count(old) != 1:
+        raise ValueError("Pinned BBRv3 patch context changed; review before applying.")
+    return content.replace(old, new, 1)
+
+
 def prepare(args):
     profile = load_json(PROFILE)
     source = args.kernel_source.resolve()
     kernel_ref = validate_ref(args.kernel_ref or profile["kernel_ref"])
-    configs = selected_configs(args.droidspaces, args.networking, args.ntsync)
+    configs = selected_configs(args.droidspaces, args.networking, args.ntsync,
+                               args.advanced_networking, args.zram)
     clean_source(source, kernel_ref)
     version = kernel_version(source)
     output = args.output.resolve()
@@ -200,12 +251,31 @@ def prepare(args):
 
     patches = []
     provenance = []
-    for origin, path in patch_sources(profile, args.droidspaces, args.ntsync):
+    includes = ZRAM_PATCH_INCLUDES if args.zram else {}
+    for origin, path in patch_sources(profile, args.droidspaces, args.ntsync,
+                                      args.advanced_networking, args.zram):
         url = f"https://raw.githubusercontent.com/{origin['repository']}/{origin['ref']}/{path}"
         content = download(url)
+        entry = {"url": url, "sha256": sha256(content)}
+        if "backport-BBRv3" in path:
+            if "int proc_dou8vec_minmax(" not in (source / "include/linux/sysctl.h").read_text():
+                raise ValueError("This BBRv3 profile requires the existing sysctl backport.")
+            content = port_bbr_context(content)
+            entry.update({"adaptation": "unchanged sysctl context only",
+                          "applied_sha256": sha256(content)})
+        if Path(path).name in includes:
+            entry["include_paths"] = includes[Path(path).name]
         patches.append((Path(path).name, content))
-        provenance.append({"url": url, "sha256": sha256(content)})
-    combined, paths = compose_patch(source, patches)
+        provenance.append(entry)
+    overlays = {}
+    if args.zram:
+        origin = profile["zram"]
+        for path, destination in origin["files"].items():
+            url = f"https://raw.githubusercontent.com/{origin['repository']}/{origin['ref']}/{path}"
+            content = download(url)
+            overlays[Path(destination)] = content
+            provenance.append({"url": url, "sha256": sha256(content), "destination": destination})
+    combined, paths = compose_patch(source, patches, overlays, includes)
     fragment = ("# Generated Droidspaces configuration for LineageOS mondrian.\n"
                 + "\n".join(configs) + "\n").encode()
     manifest = {
@@ -214,7 +284,8 @@ def prepare(args):
         "kernel_ref": kernel_ref, "kernel_version": version,
         "kernel_source": profile["kernel_source"], "board_config": profile["board_config"],
         "selection": {"droidspaces": args.droidspaces, "ntsync": args.ntsync,
-                      "networking": args.networking},
+                      "networking": args.networking,
+                      "advanced_networking": args.advanced_networking, "zram": args.zram},
         "configs": configs, "paths": paths, "patch_sources": provenance,
         "files": {"kernel.patch": sha256(combined), "droidspaces.config": sha256(fragment)},
         "abi_status": "not_compared", "device_tested": False,
@@ -241,7 +312,8 @@ def checked_bundle(bundle):
             raise ValueError(f"Bundle checksum mismatch: {name}")
     selection = manifest["selection"]
     expected = selected_configs(
-        selection["droidspaces"], selection["networking"], selection["ntsync"]
+        selection["droidspaces"], selection["networking"], selection["ntsync"],
+        selection.get("advanced_networking", False), selection.get("zram", False),
     )
     if manifest["configs"] != expected:
         raise ValueError("Bundle config does not match its selected features.")
@@ -257,7 +329,8 @@ def verify_config(config_path, expected):
     missing = [line for line in expected if line not in actual]
     if missing:
         raise ValueError("Final kernel configuration lost selected options: " + ", ".join(missing))
-    if "CONFIG_KSU_SUSFS=y" in actual:
+    if any(line.startswith("CONFIG_KSU_SUSFS") and line.endswith(("=y", "=m"))
+           for line in actual):
         raise ValueError("SUSFS is enabled in this tree; this profile does not enable it.")
 
 
@@ -420,6 +493,7 @@ def cloud_build(args):
             ])
             execute(make + ["olddefconfig"])
             verify_config(kernel_out / ".config", manifest["configs"])
+        shutil.copyfile(kernel_out / ".config", output / "kernel.config")
         execute(["/usr/bin/time", "-v", *make, f"-j{args.jobs}", "Image", "modules"])
     for path, name in (
         (kernel_out / ".config", "kernel.config"),
@@ -648,6 +722,8 @@ def main():
     prepare_parser.add_argument("--droidspaces", choices=("off", "678"), default="678")
     prepare_parser.add_argument("--ntsync", action="store_true")
     prepare_parser.add_argument("--networking", action="store_true")
+    prepare_parser.add_argument("--advanced-networking", action="store_true")
+    prepare_parser.add_argument("--zram", action="store_true")
     prepare_parser.set_defaults(function=prepare)
     build_parser = commands.add_parser("build", help="Run the official build in an existing tree.")
     build_parser.add_argument("--tree", type=Path, required=True)

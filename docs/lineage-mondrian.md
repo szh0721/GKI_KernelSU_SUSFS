@@ -27,14 +27,34 @@
    选 `self-hosted` 使用准备好的本地 Linux runner。
 2. `droidspaces` 选择 `678`。
 3. 按需打开 `droidspaces_ntsync`。
-4. `use_networking` 在这个后端只表示容器 NAT/macvlan/firewall 配置，不包含原 GKI 入口的 BBRv3。
+4. `use_networking` 开启完整网络增强：BBRv3、IPSet、CAKE、WireGuard、CIFS，以及容器 NAT/macvlan/firewall。
+5. `use_zram` 增加 LZ4K、LZ4KD、LZ4K_OPLUS、842、LZ4HC 算法支持，保留原有 ZRAM 模块。
+6. `ksu_mode` 选 `禁用SUSFS`。LineageOS 后端始终不集成 KernelSU 或 SUSFS，保留现有 LKM root。
 
-内核版本仍应选 `5.10`。其他尚未移植的 GKI 选项（ZRAM 增强、BBG、KPM、
+内核版本仍应选 `5.10`。其他尚未移植的 GKI 选项（BBG、KPM、
 Re-Kernel、NoMount、额外安全补丁链、一加适配）若开启，会明确报错，不会静默忽略。
 
 也可以使用独立的 `LineageOS mondrian - Droidspaces` 工作流，选择 `build_backend=github`。
 新增 workflow 首次进入仓库默认分支之前，使用已经存在于默认分支的“自定义”入口，
 并将运行分支选为包含本次修改的分支。
+
+当前修改位于 `lineage-mondrian`。网页操作路径：
+`Actions` → `Android 内核构建-自定义` → `Run workflow` →
+分支选择 `lineage-mondrian`，后端选择 `lineage-mondrian`，
+执行方式选择 `github`，内核版本 `5.10`，Droidspaces `678`，
+勾选 `droidspaces_ntsync`、`use_networking`、`use_zram`，KSU 模式选择 `禁用SUSFS`。
+其余增强选项保持关闭。
+
+相同的命令行触发方式：
+
+```bash
+gh workflow run kernel-custom.yml \
+  --repo szh0721/GKI_KernelSU_SUSFS --ref lineage-mondrian \
+  -f build_backend=lineage-mondrian -f lineage_build_backend=github \
+  -f kernel_version=5.10 -f droidspaces=678 \
+  -f droidspaces_ntsync=true -f use_networking=true -f use_zram=true \
+  -f ksu_mode=禁用SUSFS
+```
 
 GitHub 路线：
 
@@ -56,7 +76,11 @@ GitHub 路线：
 该检查不等于完整 ABI 认证，产物仍标记 `device_tested=false`。
 编译成功、配置一致、CRC 对照通过，均不能保证手机开机。
 
-下载 `lineage-mondrian-installer-and-reports` 查看安装包、ABI 报告和配置差异。
+下载 `AnyKernel3-mondrian-LineageOS-Droidspaces.zip` 即为可刷入的 AK3，
+使用 `upload-artifact@v7` 的 `archive: false` 直接上传，不再包裹外层 ZIP。
+运行摘要也提供安装包链接和本次选项清单。
+`lineage-mondrian-reports` 单独提供 ABI 报告和配置差异。
+旧 run 的安装包仍位于 `lineage-mondrian-installer-and-reports` 内，需要先解压外层附件。
 `retained-module-crcs.json` 记录现有模块 CRC 比较结果。
 不要把用于对照的 `baseline` artifact 当成容器补丁内核。
 CI 失败时查看 `baseline` / `patched` artifact 的 `build.log` 和配置差异；
@@ -70,12 +94,27 @@ CI 失败时查看 `baseline` / `patched` artifact 的 `build.log` 和配置差�
 | `678` | Droidspaces 官方 SYSVIPC 6/7/8 预留位补丁和 5.10 POSIX_MQUEUE 补丁 |
 | `droidspaces_ntsync` | 原仓库同源 NTSync backport，用于 Wine 等场景，默认关闭 |
 | `container_networking` | Droidspaces GKI 文档列出的 NAT、macvlan、UFW/Fail2ban 配置 |
+| `advanced_networking` | 原仓库同源 BBRv3、完整 IPSet、CAKE、WireGuard、CIFS；包含容器网络 |
+| `use_zram` | 原仓库同源 LZ4K/LZ4KD/LZ4K_OPLUS 代码和内核已有的 842/LZ4HC |
 
 这里的 `678` 是结构体 kABI padding 位，不是手机 A/B 分区。
 在默认 `eff4b40407a1...` 上，原版 `678` 和 `678 + NTSync` 已通过补丁应用预检；
 按当前 K60 的使用方式，只支持 `678`，不移植或测试其他槽位。
 原 GKI 工作流仍保留自己的槽位选项，但选择 LineageOS 后端时会拒绝 `123` / `345`。
 补丁预检通过不代表编译或设备验证通过。
+
+BBRv3 使用固定的 WildKernels 5.10 LTS 补丁；只调整 `sysctl_net_ipv4.c`
+周围未修改的上下文以匹配当前 LineageOS，保留上游实际增删逻辑。
+当前源码已包含 `proc_dou8vec_minmax` 及其修复，不重复打前置补丁。
+默认拥塞算法为 `bbr3`；Android 启动配置或应用可能在运行时覆盖它。
+
+ZRAM 增强只应用 SukiSU 补丁的 `lib` / `crypto` 部分并加入算法源码。
+明确排除其 `kernel/module.c` 中绕过 CRC 检查的逻辑，以及 ZRAM 内建化、黑名单和默认算法修改。
+`CONFIG_ZRAM=m`、`CONFIG_ZSMALLOC=m` 和原 LZ4 库保持原状。
+原版 `zram.ko` 通过 Crypto API 接受新增算法，无需替换 vendor_boot/vendor_dlkm。
+新增名称不一定出现在原模块的静态算法列表中，选中后会显示在方括号内；
+当前生效算法仍由 ROM/Scene 等配置决定，本工具不修改正在使用的 swap。
+内核支持算法不等于已经切换算法，不能对正在使用的 ZRAM 直接改压缩算法。
 
 不自动启用 `CONFIG_CFS_BANDWIDTH`、`CONFIG_CGROUP_PIDS`；
 Droidspaces 上游明确说明它们会改变 GKI kABI，现有 padding 补丁没有覆盖。
@@ -141,4 +180,6 @@ m bootimage vendorbootimage vendor_dlkmimage dtboimage recoveryimage
 - 配置合并和完整构建：`LineageOS/android_vendor_lineage` 的 `build/tasks/kernel.mk`。
 - Droidspaces：`ravindu644/Droidspaces-OSS` 的 `Documentation/Kernel-Configuration.md` 及 GKI 补丁目录。
 - NTSync：原 GKI workflow 使用的 `Goldzxcbug/Droidspaces_Kernel_patch`。
+- 网络增强：原 GKI workflow 使用的 `WildKernels/kernel_patches`。
+- ZRAM 新算法：原 GKI workflow 使用的 `ShirkNeko/SukiSU_patch`，只取算法部分。
 - AnyKernel3：`osm0sis/AnyKernel3`，固定 commit 见配置。

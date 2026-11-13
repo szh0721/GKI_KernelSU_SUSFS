@@ -71,12 +71,68 @@ new file mode 100644
         for name in ("KSU", "KSU_SUSFS", "CFS_BANDWIDTH", "CGROUP_PIDS", "CFI_PERMISSIVE"):
             self.assertNotIn(f"CONFIG_{name}=y", configs)
 
+    def test_full_feature_profile_preserves_stock_zram_module_layout(self):
+        configs = lineage.selected_configs("678", True, True, True, True)
+        for name in ("NTSYNC", "TCP_CONG_BBR3", "NET_SCH_CAKE", "CIFS", "WIREGUARD",
+                     "CRYPTO_LZ4K", "CRYPTO_LZ4KD", "CRYPTO_LZ4K_OPLUS"):
+            self.assertIn(f"CONFIG_{name}=y", configs)
+        self.assertIn("CONFIG_ZRAM=m", configs)
+        self.assertIn("CONFIG_ZSMALLOC=m", configs)
+        self.assertNotIn("CONFIG_ZRAM=y", configs)
+        self.assertNotIn("CONFIG_ZSMALLOC=y", configs)
+        with self.assertRaises(ValueError):
+            lineage.selected_configs("off", False, False, True)
+
+    def test_zram_patch_filter_excludes_module_loader_and_driver_changes(self):
+        patch = b"""diff --git a/crypto/Makefile b/crypto/Makefile
+--- a/crypto/Makefile
++++ b/crypto/Makefile
+@@ -1 +1,2 @@
+ existing
++algorithm
+diff --git a/kernel/module.c b/kernel/module.c
+--- a/kernel/module.c
++++ b/kernel/module.c
+@@ -1 +1 @@
+-check versions
++ignore versions
+"""
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            (source / "crypto").mkdir()
+            (source / "kernel").mkdir()
+            (source / "crypto/Makefile").write_text("existing\n")
+            (source / "kernel/module.c").write_text("check versions\n")
+            combined, paths = lineage.compose_patch(
+                source, [("lz4kd.patch", patch)],
+                overlays={Path("crypto/new.c"): b"new algorithm\n"},
+                includes=lineage.ZRAM_PATCH_INCLUDES,
+            )
+            self.assertEqual(paths, ["crypto/Makefile", "crypto/new.c"])
+            self.assertNotIn(b"kernel/module.c", combined)
+            self.assertIn(b"new algorithm", combined)
+            self.assertEqual((source / "kernel/module.c").read_text(), "check versions\n")
+            self.assertFalse((source / "crypto/new.c").exists())
+
+    def test_bbr_context_port_does_not_change_upstream_edits(self):
+        patch = (b"@@ -1,4 +1,5 @@\n one_day_secs\n+upstream code\n"
+                 b" \n static int tcp_min_rcvbuf = 4096;\n \n")
+        adapted = lineage.port_bbr_context(patch)
+        self.assertEqual([line for line in patch.splitlines() if line.startswith((b"+", b"-"))],
+                         [line for line in adapted.splitlines() if line.startswith((b"+", b"-"))])
+        self.assertIn(b"sysctl_tcp_low_latency", adapted)
+        with self.assertRaises(ValueError):
+            lineage.port_bbr_context(b"unrecognized patch")
+
     def test_final_config_must_retain_selected_features(self):
         with tempfile.TemporaryDirectory() as temporary:
             config = Path(temporary) / "config"
             config.write_text("CONFIG_SYSVIPC=y\n# CONFIG_PID_NS is not set\n")
             with self.assertRaisesRegex(ValueError, "CONFIG_PID_NS"):
                 lineage.verify_config(config, ["CONFIG_SYSVIPC=y", "CONFIG_PID_NS=y"])
+            config.write_text("CONFIG_KSU_SUSFS_SUS_PATH=y\n")
+            with self.assertRaisesRegex(ValueError, "SUSFS"):
+                lineage.verify_config(config, [])
 
     def test_crc_comparison_distinguishes_additions_changes_and_removals(self):
         with tempfile.TemporaryDirectory() as temporary:

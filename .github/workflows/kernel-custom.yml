@@ -121,7 +121,7 @@ on:
         type: boolean
         default: false
       use_networking:
-        description: "GKI: BBRv3 / IPSet / Qdisc / CIFS；LineageOS: 容器 NAT / firewall"
+        description: "网络增强（BBRv3 / IPSet / CAKE / WireGuard / CIFS / 容器 NAT）"
         required: false
         type: boolean
         default: false
@@ -271,7 +271,7 @@ jobs:
               raise SystemExit("The LineageOS mondrian profile supports Droidspaces 678 or off only.")
           unsupported = [
               name for name in (
-                  "use_zram", "use_bbg", "use_rekernel", "use_nomount",
+                  "use_bbg", "use_rekernel", "use_nomount",
                   "cve_2026_43499_patch", "supp_op",
               ) if values.get(name)
           ]
@@ -289,4 +289,6 @@ jobs:
       droidspaces: ${{ inputs.droidspaces || '678' }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
       container_networking: ${{ inputs.use_networking || false }}
+      advanced_networking: ${{ inputs.use_networking || false }}
+      use_zram: ${{ inputs.use_zram || false }}
       build_backend: ${{ inputs.lineage_build_backend || 'github' }}

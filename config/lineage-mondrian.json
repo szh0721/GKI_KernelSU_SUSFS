@@ -25,5 +25,37 @@
   "ntsync": {
     "repository": "Goldzxcbug/Droidspaces_Kernel_patch",
     "ref": "dc0f76bedd790b7738e5695509297ee71ca4a2c2"
+  },
+  "network": {
+    "repository": "WildKernels/kernel_patches",
+    "ref": "a9ccf6ebee3aba7e39213e361e45fbffd485205d"
+  },
+  "zram": {
+    "repository": "ShirkNeko/SukiSU_patch",
+    "ref": "eec45788c9a115e5498040298133336d6b6071dd",
+    "files": {
+      "other/zram/lz4k/include/linux/lz4k.h": "include/linux/lz4k.h",
+      "other/zram/lz4k/include/linux/lz4kd.h": "include/linux/lz4kd.h",
+      "other/zram/lz4k/crypto/lz4k.c": "crypto/lz4k.c",
+      "other/zram/lz4k/crypto/lz4kd.c": "crypto/lz4kd.c",
+      "other/zram/lz4k/lib/lz4k/Makefile": "lib/lz4k/Makefile",
+      "other/zram/lz4k/lib/lz4k/lz4k_decode.c": "lib/lz4k/lz4k_decode.c",
+      "other/zram/lz4k/lib/lz4k/lz4k_encode.c": "lib/lz4k/lz4k_encode.c",
+      "other/zram/lz4k/lib/lz4k/lz4k_encode_private.h": "lib/lz4k/lz4k_encode_private.h",
+      "other/zram/lz4k/lib/lz4k/lz4k_private.h": "lib/lz4k/lz4k_private.h",
+      "other/zram/lz4k/lib/lz4kd/Makefile": "lib/lz4kd/Makefile",
+      "other/zram/lz4k/lib/lz4kd/lz4kd_decode.c": "lib/lz4kd/lz4kd_decode.c",
+      "other/zram/lz4k/lib/lz4kd/lz4kd_decode_delta.c": "lib/lz4kd/lz4kd_decode_delta.c",
+      "other/zram/lz4k/lib/lz4kd/lz4kd_encode.c": "lib/lz4kd/lz4kd_encode.c",
+      "other/zram/lz4k/lib/lz4kd/lz4kd_encode_delta.c": "lib/lz4kd/lz4kd_encode_delta.c",
+      "other/zram/lz4k/lib/lz4kd/lz4kd_encode_private.h": "lib/lz4kd/lz4kd_encode_private.h",
+      "other/zram/lz4k/lib/lz4kd/lz4kd_private.h": "lib/lz4kd/lz4kd_private.h",
+      "other/zram/lz4k_oplus/Kconfig": "lib/lz4k_oplus/Kconfig",
+      "other/zram/lz4k_oplus/Makefile": "lib/lz4k_oplus/Makefile",
+      "other/zram/lz4k_oplus/lz4k.c": "lib/lz4k_oplus/lz4k.c",
+      "other/zram/lz4k_oplus/lz4k.h": "lib/lz4k_oplus/lz4k.h",
+      "other/zram/lz4k_oplus/lz4k_compress.c": "lib/lz4k_oplus/lz4k_compress.c",
+      "other/zram/lz4k_oplus/lz4k_decompress.c": "lib/lz4k_oplus/lz4k_decompress.c"
+    }
   }
 }

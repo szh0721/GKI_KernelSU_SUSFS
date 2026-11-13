@@ -26,6 +26,14 @@ on:
         description: "Enable Droidspaces GKI NAT, macvlan and firewall options"
         type: boolean
         default: false
+      advanced_networking:
+        description: "BBRv3, full IPSet, CAKE, WireGuard and CIFS (includes container networking)"
+        type: boolean
+        default: false
+      use_zram:
+        description: "Add LZ4K/LZ4KD/LZ4K_OPLUS/842/LZ4HC; retain stock ZRAM modules"
+        type: boolean
+        default: false
       build_backend:
         description: "Hosted runner first; self-hosted needs a prepared LineageOS tree"
         type: choice
@@ -46,6 +54,12 @@ on:
         type: boolean
         default: false
       container_networking:
+        type: boolean
+        default: false
+      advanced_networking:
+        type: boolean
+        default: false
+      use_zram:
         type: boolean
         default: false
       build_backend:
@@ -72,6 +86,9 @@ jobs:
             include
             drivers/misc
             kernel/locking
+            net/ipv4
+            lib
+            crypto
 
       - name: Validate the entire selected patch series
         env:
@@ -79,10 +96,14 @@ jobs:
           DROIDSPACES: ${{ inputs.droidspaces }}
           NTSYNC: ${{ inputs.droidspaces_ntsync }}
           NETWORKING: ${{ inputs.container_networking }}
+          ADVANCED_NETWORKING: ${{ inputs.advanced_networking }}
+          ZRAM: ${{ inputs.use_zram }}
         run: |
           args=()
           if [[ "$NTSYNC" == "true" ]]; then args+=(--ntsync); fi
           if [[ "$NETWORKING" == "true" ]]; then args+=(--networking); fi
+          if [[ "$ADVANCED_NETWORKING" == "true" ]]; then args+=(--advanced-networking); fi
+          if [[ "$ZRAM" == "true" ]]; then args+=(--zram); fi
           python3 builder/scripts/lineage.py prepare \
             --kernel-source kernel --kernel-ref "$KERNEL_REF" \
             --output bundle --droidspaces "$DROIDSPACES" "${args[@]}"
@@ -216,12 +237,46 @@ jobs:
           python3 builder/scripts/lineage.py package \
             --baseline baseline --patched patched --anykernel AnyKernel3 --output package
 
-      - name: Upload installer and comparison reports
+      - name: Download the flashable AK3 directly
+        id: ak3
+        uses: actions/upload-artifact@v7
+        with:
+          path: package/AnyKernel3-mondrian-LineageOS-Droidspaces.zip
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Add installer link and selected features to the summary
+        env:
+          AK3_URL: ${{ steps.ak3.outputs.artifact-url }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          manifest = json.loads(Path("package/manifest.json").read_text())
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("## LineageOS mondrian\n\n")
+              summary.write(f"[Download flashable AnyKernel3 ZIP]({os.environ['AK3_URL']})\n\n")
+              summary.write("This download is the installer itself; no outer ZIP to extract.\n\n")
+              summary.write("| Option | Selected |\n| --- | --- |\n")
+              for name, value in manifest["selection"].items():
+                  summary.write(f"| {name} | {value} |\n")
+              summary.write("| SUSFS | disabled |\n\n")
+              summary.write("Baseline and retained ROM module CRC checks passed. "
+                            "This build has not been boot-tested.\n")
+          PY
+
+      - name: Upload comparison reports
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: lineage-mondrian-installer-and-reports
-          path: package/
+          name: lineage-mondrian-reports
+          path: |
+            package/*.json
+            package/kernel.config
+            package/Module.symvers
+            package/SHA256SUMS
           if-no-files-found: warn
           retention-days: 14
 
